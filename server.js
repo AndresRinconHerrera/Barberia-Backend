@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
-const path = require('path'); // <-- 1. Importamos 'path' para manejar rutas de carpetas
+const path = require('path'); // Importamos 'path' para manejar rutas de carpetas
 
 const app = express();
 app.use(cors());
@@ -61,8 +61,52 @@ let db;
     )
   `);
 
+  // 5. Tabla de usuarios (Administradores y Barberos)
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS usuarios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE,
+      password TEXT,
+      nombre TEXT,
+      rol TEXT
+    )
+  `);
+
+  // Insertar un administrador por defecto si no existe
+  const adminExistente = await db.get('SELECT * FROM usuarios WHERE email = ?', ['admin@monarch.com']);
+  if (!adminExistente) {
+    await db.run(
+      'INSERT INTO usuarios (email, password, nombre, rol) VALUES (?, ?, ?, ?)',
+      ['admin@monarch.com', 'admin123', 'Administrador', 'admin']
+    );
+  }
+
   console.log('✅ Base de datos SQLite conectada correctamente con todas las tablas.');
 })();
+
+// ==================== RUTAS DE AUTENTICACIÓN ====================
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ? AND password = ?', [email, password]);
+    if (usuario) {
+      res.json({ 
+        success: true, 
+        usuario: { 
+          id: usuario.id, 
+          nombre: usuario.nombre, 
+          email: usuario.email, 
+          rol: usuario.rol 
+        } 
+      });
+    } else {
+      res.status(401).json({ success: false, message: 'Correo o contraseña incorrectos' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ==================== RUTAS DE CITAS ====================
 
@@ -191,10 +235,8 @@ app.delete('/api/bloqueos/:id', async (req, res) => {
 });
 
 // ==================== SERVIR EL FRONTEND (Carpeta dist) ====================
-// 2. Le indicamos a Express que los archivos de la página web están en la carpeta 'dist'
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// 3. Cualquier ruta que no sea de la API (/api/...) la mandará directo a la interfaz de React
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
