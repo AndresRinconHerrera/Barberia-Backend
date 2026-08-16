@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
-const path = require('path'); // Importamos 'path' para manejar rutas de carpetas
+const path = require('path');
+const bcrypt = require('bcrypt'); // 👈 Importamos bcrypt
 
 const app = express();
 app.use(cors());
@@ -72,13 +73,16 @@ let db;
     )
   `);
 
-  // Insertar un administrador por defecto si no existe
+  // Insertar un administrador por defecto si no existe (con contraseña hasheada)
   const adminExistente = await db.get('SELECT * FROM usuarios WHERE email = ?', ['admin@monarch.com']);
   if (!adminExistente) {
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash('admin123', saltRounds);
     await db.run(
       'INSERT INTO usuarios (email, password, nombre, rol) VALUES (?, ?, ?, ?)',
-      ['admin@monarch.com', 'admin123', 'Administrador', 'admin']
+      ['admin@monarch.com', hashedPassword, 'Administrador', 'admin']
     );
+    console.log('🛡️ Administrador por defecto creado de forma segura.');
   }
 
   console.log('✅ Base de datos SQLite conectada correctamente con todas las tablas.');
@@ -89,20 +93,27 @@ let db;
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ? AND password = ?', [email, password]);
+    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+    
     if (usuario) {
-      res.json({ 
-        success: true, 
-        usuario: { 
-          id: usuario.id, 
-          nombre: usuario.nombre, 
-          email: usuario.email, 
-          rol: usuario.rol 
-        } 
-      });
-    } else {
-      res.status(401).json({ success: false, message: 'Correo o contraseña incorrectos' });
+      // Validar la contraseña usando bcrypt.compare
+      const passwordValida = await bcrypt.compare(password, usuario.password);
+      
+      if (passwordValida) {
+        res.json({ 
+          success: true, 
+          usuario: { 
+            id: usuario.id, 
+            nombre: usuario.nombre, 
+            email: usuario.email, 
+            rol: usuario.rol 
+          } 
+        });
+        return;
+      }
     }
+    
+    res.status(401).json({ success: false, message: 'Correo o contraseña incorrectos' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -241,7 +252,8 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// Arrancar el servidor
-app.listen(3001, () => {
-  console.log('🚀 Servidor y base de datos corriendo en http://localhost:3001');
+// Arrancar el servidor (Puerto dinámico para producción + respaldo local 3001)
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor y base de datos corriendo en el puerto ${PORT}`);
 });
