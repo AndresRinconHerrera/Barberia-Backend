@@ -3,6 +3,10 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
 const bcrypt = require('bcrypt');
+const dns = require('dns');
+
+// Forzar el uso de IPv4 para evitar problemas de conexión en la nube (Render)
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 app.use(cors());
