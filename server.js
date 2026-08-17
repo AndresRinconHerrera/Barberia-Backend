@@ -254,6 +254,7 @@ app.get('*', (req, res) => {
 
 // Arrancar el servidor (Puerto dinámico para producción + respaldo local 3001)
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor y base de datos corriendo en el puerto ${PORT}`);
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Servidor y base de datos corriendo en 0.0.0.0:${PORT}`);
 });
