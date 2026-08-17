@@ -6,7 +6,10 @@ const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // ✅ Aumentar límite
+
+// ✅ Límites aumentados para evitar el error 413 (Payload Too Large) con imágenes en Base64
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Extraer los parámetros de la URL para forzar una conexión IPv4 limpia en Render
 const connectionString = process.env.DATABASE_URL;
@@ -39,7 +42,6 @@ async function inicializarTablas() {
       )
     `);
 
-    // ✅ Tabla barberos con todos los campos necesarios
     await pool.query(`
       CREATE TABLE IF NOT EXISTS barberos (
         id SERIAL PRIMARY KEY,
@@ -175,7 +177,6 @@ app.get('/api/barberos', async (req, res) => {
   }
 });
 
-// ✅ Ruta POST corregida
 app.post('/api/barberos', async (req, res) => {
   const { nombre, email, telefono, password, rol, especialidad, experiencia, foto, activo } = req.body;
   try {
@@ -190,7 +191,6 @@ app.post('/api/barberos', async (req, res) => {
   }
 });
 
-// ✅ Ruta PUT agregada (faltaba)
 app.put('/api/barberos/:id', async (req, res) => {
   const { id } = req.params;
   const { nombre, email, telefono, especialidad, experiencia, foto, password, activo } = req.body;
@@ -292,7 +292,7 @@ app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
- 
+
 // Inicializar y arrancar servidor
 inicializarTablas().then(() => {
   const PORT = process.env.PORT || 3001;
