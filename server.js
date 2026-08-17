@@ -6,7 +6,7 @@ const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // ✅ Aumentar límite
 
 // Extraer los parámetros de la URL para forzar una conexión IPv4 limpia en Render
 const connectionString = process.env.DATABASE_URL;
@@ -30,6 +30,7 @@ async function inicializarTablas() {
       CREATE TABLE IF NOT EXISTS citas (
         id SERIAL PRIMARY KEY,
         cliente TEXT,
+        telefono TEXT,
         barbero TEXT,
         servicio TEXT,
         fecha TEXT,
@@ -38,13 +39,19 @@ async function inicializarTablas() {
       )
     `);
 
+    // ✅ Tabla barberos con todos los campos necesarios
     await pool.query(`
       CREATE TABLE IF NOT EXISTS barberos (
         id SERIAL PRIMARY KEY,
         nombre TEXT,
+        email TEXT UNIQUE,
+        telefono TEXT,
+        password TEXT,
+        rol TEXT DEFAULT 'barbero',
         especialidad TEXT,
         experiencia TEXT,
-        foto TEXT
+        foto TEXT,
+        activo BOOLEAN DEFAULT true
       )
     `);
 
@@ -135,13 +142,14 @@ app.get('/api/citas-ocupadas', async (req, res) => {
 });
 
 app.post('/api/citas', async (req, res) => {
-  const { cliente, barbero, servicio, fecha, hora } = req.body;
+  const { cliente, telefono, barbero, servicio, fecha, hora, estado } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO citas (cliente, barbero, servicio, fecha, hora) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [cliente, barbero, servicio, fecha, hora]
+      `INSERT INTO citas (cliente, telefono, barbero, servicio, fecha, hora, estado) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [cliente, telefono, barbero, servicio, fecha, hora, estado || 'Pendiente']
     );
-    res.json({ id: result.rows[0].id, cliente, barbero, servicio, fecha, hora, estado: 'Pendiente' });
+    res.json({ id: result.rows[0].id, cliente, telefono, barbero, servicio, fecha, hora, estado: estado || 'Pendiente' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -167,14 +175,52 @@ app.get('/api/barberos', async (req, res) => {
   }
 });
 
+// ✅ Ruta POST corregida
 app.post('/api/barberos', async (req, res) => {
-  const { nombre, especialidad, experiencia, foto } = req.body;
+  const { nombre, email, telefono, password, rol, especialidad, experiencia, foto, activo } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO barberos (nombre, especialidad, experiencia, foto) VALUES ($1, $2, $3, $4) RETURNING id',
-      [nombre, especialidad, experiencia, foto]
+      `INSERT INTO barberos (nombre, email, telefono, password, rol, especialidad, experiencia, foto, activo) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [nombre, email, telefono, password, rol || 'barbero', especialidad, experiencia, foto, activo !== undefined ? activo : true]
     );
-    res.json({ id: result.rows[0].id, nombre, especialidad, experiencia, foto });
+    res.json({ id: result.rows[0].id, nombre, email, telefono, rol, especialidad, experiencia, foto, activo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Ruta PUT agregada (faltaba)
+app.put('/api/barberos/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, email, telefono, especialidad, experiencia, foto, password, activo } = req.body;
+  
+  try {
+    let query = 'UPDATE barberos SET ';
+    const params = [];
+    const updates = [];
+
+    if (nombre !== undefined) { updates.push(`nombre = $${params.length + 1}`); params.push(nombre); }
+    if (email !== undefined) { updates.push(`email = $${params.length + 1}`); params.push(email); }
+    if (telefono !== undefined) { updates.push(`telefono = $${params.length + 1}`); params.push(telefono); }
+    if (especialidad !== undefined) { updates.push(`especialidad = $${params.length + 1}`); params.push(especialidad); }
+    if (experiencia !== undefined) { updates.push(`experiencia = $${params.length + 1}`); params.push(experiencia); }
+    if (foto !== undefined) { updates.push(`foto = $${params.length + 1}`); params.push(foto); }
+    if (password !== undefined && password !== '') { updates.push(`password = $${params.length + 1}`); params.push(password); }
+    if (activo !== undefined) { updates.push(`activo = $${params.length + 1}`); params.push(activo); }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No hay datos para actualizar' });
+    }
+
+    query += updates.join(', ') + ` WHERE id = $${params.length + 1}`;
+    params.push(id);
+
+    const result = await pool.query(query, params);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Barbero no encontrado' });
+    }
+    res.json({ id: parseInt(id), ...req.body });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
