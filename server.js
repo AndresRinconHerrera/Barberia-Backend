@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const sqlite3 = require('sqlite3');
-const { open } = require('sqlite');
+const { Pool } = require('pg');
 const path = require('path');
 const bcrypt = require('bcrypt');
 
@@ -9,19 +8,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-let db;
+// Configuración de la conexión a Supabase (PostgreSQL)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Necesario para conexiones seguras en la nube
+  }
+});
 
-// 1. Inicializar la base de datos y sus tablas
-async function iniciarBaseDeDatos() {
+// Inicializar tablas en PostgreSQL al arrancar
+async function inicializarTablas() {
   try {
-    db = await open({
-      filename: './barberia.db',
-      driver: sqlite3.Database
-    });
-
-    await db.exec(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS citas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         cliente TEXT,
         barbero TEXT,
         servicio TEXT,
@@ -31,9 +31,9 @@ async function iniciarBaseDeDatos() {
       )
     `);
 
-    await db.exec(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS barberos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         nombre TEXT,
         especialidad TEXT,
         experiencia TEXT,
@@ -41,27 +41,27 @@ async function iniciarBaseDeDatos() {
       )
     `);
 
-    await db.exec(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS servicios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         nombre TEXT,
         precio INTEGER,
         duracion TEXT
       )
     `);
 
-    await db.exec(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS bloqueos_horarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         barbero TEXT,
         fecha TEXT,
         hora TEXT
       )
     `);
 
-    await db.exec(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         email TEXT UNIQUE,
         password TEXT,
         nombre TEXT,
@@ -69,19 +69,20 @@ async function iniciarBaseDeDatos() {
       )
     `);
 
-    const adminExistente = await db.get('SELECT * FROM usuarios WHERE email = ?', ['admin@monarch.com']);
-    if (!adminExistente) {
+    // Crear usuario admin por defecto si no existe
+    const adminCheck = await pool.query('SELECT * FROM usuarios WHERE email = $1', ['admin@monarch.com']);
+    if (adminCheck.rows.length === 0) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
-      await db.run(
-        'INSERT INTO usuarios (email, password, nombre, rol) VALUES (?, ?, ?, ?)',
+      await pool.query(
+        'INSERT INTO usuarios (email, password, nombre, rol) VALUES ($1, $2, $3, $4)',
         ['admin@monarch.com', hashedPassword, 'Administrador', 'admin']
       );
-      console.log('🛡️ Administrador por defecto creado de forma segura.');
+      console.log('🛡️ Administrador por defecto creado.');
     }
 
-    console.log('✅ Base de datos SQLite conectada correctamente con todas las tablas.');
+    console.log('✅ Base de datos PostgreSQL conectada y tablas listas.');
   } catch (err) {
-    console.error('❌ Error al inicializar la base de datos:', err);
+    console.error('❌ Error al inicializar tablas:', err);
   }
 }
 
@@ -90,7 +91,8 @@ async function iniciarBaseDeDatos() {
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+    const result = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    const usuario = result.rows[0];
     if (usuario && await bcrypt.compare(password, usuario.password)) {
       return res.json({ 
         success: true, 
@@ -104,15 +106,22 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/citas', async (req, res) => {
-  const citas = await db.all('SELECT * FROM citas');
-  res.json(citas);
+  try {
+    const result = await pool.query('SELECT * FROM citas');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/citas-ocupadas', async (req, res) => {
   const { barbero, fecha } = req.query;
   try {
-    const rows = await db.all(`SELECT hora FROM citas WHERE barbero = ? AND fecha = ? AND estado != 'Cancelada'`, [barbero, fecha]);
-    res.json(rows.map(row => row.hora));
+    const result = await pool.query(
+      `SELECT hora FROM citas WHERE barbero = $1 AND fecha = $2 AND estado != 'Cancelada'`, 
+      [barbero, fecha]
+    );
+    res.json(result.rows.map(row => row.hora));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -120,70 +129,110 @@ app.get('/api/citas-ocupadas', async (req, res) => {
 
 app.post('/api/citas', async (req, res) => {
   const { cliente, barbero, servicio, fecha, hora } = req.body;
-  const result = await db.run(
-    'INSERT INTO citas (cliente, barbero, servicio, fecha, hora) VALUES (?, ?, ?, ?, ?)',
-    [cliente, barbero, servicio, fecha, hora]
-  );
-  res.json({ id: result.lastID, cliente, barbero, servicio, fecha, hora, estado: 'Pendiente' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO citas (cliente, barbero, servicio, fecha, hora) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [cliente, barbero, servicio, fecha, hora]
+    );
+    res.json({ id: result.rows[0].id, cliente, barbero, servicio, fecha, hora, estado: 'Pendiente' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.put('/api/citas/:id', async (req, res) => {
   const { id } = req.params;
   const { estado } = req.body;
-  await db.run('UPDATE citas SET estado = ? WHERE id = ?', [estado, id]);
-  res.json({ message: 'Estado actualizado correctamente' });
+  try {
+    await pool.query('UPDATE citas SET estado = $1 WHERE id = $2', [estado, id]);
+    res.json({ message: 'Estado actualizado correctamente' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/barberos', async (req, res) => {
-  const barberos = await db.all('SELECT * FROM barberos');
-  res.json(barberos);
+  try {
+    const result = await pool.query('SELECT * FROM barberos');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/barberos', async (req, res) => {
   const { nombre, especialidad, experiencia, foto } = req.body;
-  const result = await db.run(
-    'INSERT INTO barberos (nombre, especialidad, experiencia, foto) VALUES (?, ?, ?, ?)',
-    [nombre, especialidad, experiencia, foto]
-  );
-  res.json({ id: result.lastID, nombre, especialidad, experiencia, foto });
+  try {
+    const result = await pool.query(
+      'INSERT INTO barberos (nombre, especialidad, experiencia, foto) VALUES ($1, $2, $3, $4) RETURNING id',
+      [nombre, especialidad, experiencia, foto]
+    );
+    res.json({ id: result.rows[0].id, nombre, especialidad, experiencia, foto });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/barberos/:id', async (req, res) => {
-  await db.run('DELETE FROM barberos WHERE id = ?', [req.params.id]);
-  res.json({ message: 'Barbero eliminado correctamente' });
+  try {
+    await pool.query('DELETE FROM barberos WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Barbero eliminado correctamente' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/servicios', async (req, res) => {
-  const servicios = await db.all('SELECT * FROM servicios');
-  res.json(servicios);
+  try {
+    const result = await pool.query('SELECT * FROM servicios');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/servicios', async (req, res) => {
   const { nombre, precio, duracion } = req.body;
-  const result = await db.run(
-    'INSERT INTO servicios (nombre, precio, duracion) VALUES (?, ?, ?)',
-    [nombre, precio, duracion]
-  );
-  res.json({ id: result.lastID, nombre, precio, duracion });
+  try {
+    const result = await pool.query(
+      'INSERT INTO servicios (nombre, precio, duracion) VALUES ($1, $2, $3) RETURNING id',
+      [nombre, precio, duracion]
+    );
+    res.json({ id: result.rows[0].id, nombre, precio, duracion });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/bloqueos', async (req, res) => {
-  const bloqueos = await db.all('SELECT * FROM bloqueos_horarios');
-  res.json(bloqueos);
+  try {
+    const result = await pool.query('SELECT * FROM bloqueos_horarios');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/bloqueos', async (req, res) => {
   const { barbero, fecha, hora } = req.body;
-  const result = await db.run(
-    'INSERT INTO bloqueos_horarios (barbero, fecha, hora) VALUES (?, ?, ?)',
-    [barbero, fecha, hora]
-  );
-  res.json({ id: result.lastID, barbero, fecha, hora });
+  try {
+    const result = await pool.query(
+      'INSERT INTO bloqueos_horarios (barbero, fecha, hora) VALUES ($1, $2, $3) RETURNING id',
+      [barbero, fecha, hora]
+    );
+    res.json({ id: result.rows[0].id, barbero, fecha, hora });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/bloqueos/:id', async (req, res) => {
-  await db.run('DELETE FROM bloqueos_horarios WHERE id = ?', [req.params.id]);
-  res.json({ message: 'Bloqueo eliminado correctamente' });
+  try {
+    await pool.query('DELETE FROM bloqueos_horarios WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Bloqueo eliminado correctamente' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -191,10 +240,10 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// 2. Iniciar base de datos y luego encender el servidor HTTP
-iniciarBaseDeDatos().then(() => {
+// Inicializar y arrancar servidor
+inicializarTablas().then(() => {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor corriendo en 0.0.0.0:${PORT}`);
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
   });
 });
