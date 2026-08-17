@@ -3,20 +3,23 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
 const bcrypt = require('bcrypt');
-const dns = require('dns');
-
-// Forzar el uso de IPv4 para evitar problemas de conexión en la nube (Render)
-dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configuración de la conexión a Supabase (PostgreSQL)
+// Extraer los parámetros de la URL para forzar una conexión IPv4 limpia en Render
+const connectionString = process.env.DATABASE_URL;
+const url = new URL(connectionString);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  host: url.hostname,
+  port: url.port || 5432,
+  database: url.pathname.slice(1),
+  user: url.username,
+  password: url.password,
   ssl: {
-    rejectUnauthorized: false // Necesario para conexiones seguras en la nube
+    rejectUnauthorized: false
   }
 });
 
