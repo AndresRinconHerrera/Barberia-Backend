@@ -246,7 +246,7 @@ app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
-
+ 
 // Inicializar y arrancar servidor
 inicializarTablas().then(() => {
   const PORT = process.env.PORT || 3001;
