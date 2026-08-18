@@ -153,6 +153,7 @@ app.post('/api/citas', async (req, res) => {
     );
     res.json({ id: result.rows[0].id, cliente, telefono, barbero, servicio, fecha, hora, estado: estado || 'Pendiente' });
   } catch (err) {
+    console.error("❌ DETALLE DEL ERROR AL GUARDAR CITA EN SUPABASE:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -299,4 +300,4 @@ inicializarTablas().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
   });
-}); 
+});
