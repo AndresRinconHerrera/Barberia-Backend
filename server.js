@@ -143,18 +143,93 @@ app.get('/api/citas-ocupadas', async (req, res) => {
   }
 });
 
+// ✅ RUTA POST /api/citas CON VALIDACIÓN DE HORAS PASADAS
 app.post('/api/citas', async (req, res) => {
   const { cliente, telefono, barbero, servicio, fecha, hora, estado } = req.body;
+  
+  console.log("📥 Recibiendo solicitud para guardar cita...");
+  console.log("📦 Datos recibidos:", req.body);
+  
+  // Validar campos obligatorios
+  if (!cliente || !telefono || !barbero || !servicio || !fecha || !hora) {
+    console.error("❌ Faltan campos obligatorios:", { cliente, telefono, barbero, servicio, fecha, hora });
+    return res.status(400).json({ 
+      error: 'Faltan campos obligatorios para crear la cita',
+      camposFaltantes: { 
+        cliente: !cliente, 
+        telefono: !telefono, 
+        barbero: !barbero, 
+        servicio: !servicio, 
+        fecha: !fecha, 
+        hora: !hora 
+      }
+    });
+  }
+  
+  // Validar formato de teléfono
+  const telefonoLimpio = telefono.replace(/\D/g, '');
+  if (telefonoLimpio.length !== 10) {
+    console.error("❌ Teléfono inválido:", telefono);
+    return res.status(400).json({ error: 'El teléfono debe tener 10 dígitos' });
+  }
+  
+  // ✅ VALIDACIÓN DE HORAS PASADAS
+  const hoy = new Date().toISOString().split('T')[0];
+  if (fecha === hoy) {
+    // Convertir hora "09:00 AM" a formato 24 horas para comparar
+    const horaParts = hora.replace(' AM', '').replace(' PM', '').split(':').map(Number);
+    let hora24 = horaParts[0];
+    if (hora.includes('PM') && horaParts[0] !== 12) hora24 = horaParts[0] + 12;
+    if (hora.includes('AM') && horaParts[0] === 12) hora24 = 0;
+    const minutos = horaParts[1];
+    
+    const ahora = new Date();
+    const horaActual = ahora.getHours();
+    const minutosActual = ahora.getMinutes();
+    
+    // Comparar si la hora seleccionada ya pasó
+    if (hora24 < horaActual || (hora24 === horaActual && minutos < minutosActual)) {
+      console.error(`❌ Hora pasada: ${hora} (${hora24}:${minutos}) vs ahora (${horaActual}:${minutosActual})`);
+      return res.status(400).json({ 
+        error: 'No se pueden agendar citas en horarios que ya transcurrieron. Por favor, selecciona una hora futura.',
+        horaSeleccionada: hora,
+        horaActual: `${horaActual}:${minutosActual.toString().padStart(2, '0')}`
+      });
+    }
+    console.log(`✅ Hora válida: ${hora} es futura`);
+  }
+  
   try {
+    console.log("✅ Campos validados correctamente, intentando insertar en la base de datos...");
+    
     const result = await pool.query(
       `INSERT INTO citas (cliente, telefono, barbero, servicio, fecha, hora, estado) 
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [cliente, telefono, barbero, servicio, fecha, hora, estado || 'Pendiente']
+      [cliente, telefonoLimpio, barbero, servicio, fecha, hora, estado || 'Confirmada']
     );
-    res.json({ id: result.rows[0].id, cliente, telefono, barbero, servicio, fecha, hora, estado: estado || 'Pendiente' });
+    
+    console.log("✅ Cita guardada exitosamente con ID:", result.rows[0].id);
+    
+    res.json({ 
+      id: result.rows[0].id, 
+      cliente, 
+      telefono: telefonoLimpio, 
+      barbero, 
+      servicio, 
+      fecha, 
+      hora, 
+      estado: estado || 'Confirmada' 
+    });
+    
   } catch (err) {
-    console.error("❌ DETALLE DEL ERROR AL GUARDAR CITA EN SUPABASE:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("❌ DETALLE DEL ERROR AL GUARDAR CITA:", err.message);
+    console.error("❌ Stack trace:", err.stack);
+    console.error("❌ Datos que se intentaron guardar:", { cliente, telefono, barbero, servicio, fecha, hora });
+    res.status(500).json({ 
+      error: err.message,
+      detalle: err.stack,
+      datosRecibidos: { cliente, telefono, barbero, servicio, fecha, hora }
+    });
   }
 });
 
