@@ -343,14 +343,19 @@ app.get('/api/bloqueos', async (req, res) => {
 });
 
 app.post('/api/bloqueos', async (req, res) => {
+  console.log("📥 Recibiendo solicitud para guardar bloqueo de horario...");
+  console.log("📦 Datos de bloqueo recibidos:", req.body);
   const { barbero, fecha, hora } = req.body;
   try {
     const result = await pool.query(
       'INSERT INTO bloqueos_horarios (barbero, fecha, hora) VALUES ($1, $2, $3) RETURNING id',
       [barbero, fecha, hora]
     );
+    console.log("✅ Bloqueo guardado exitosamente con ID:", result.rows[0].id);
     res.json({ id: result.rows[0].id, barbero, fecha, hora });
   } catch (err) {
+    console.error("❌ DETALLE DEL ERROR AL GUARDAR BLOQUEO:", err.message);
+    console.error("❌ Stack trace de bloqueo:", err.stack);
     res.status(500).json({ error: err.message });
   }
 });
